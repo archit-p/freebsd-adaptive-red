@@ -57,7 +57,7 @@
  * SUCH DAMAGE.
  *
  * $KAME: altq_red.c,v 1.18 2003/09/05 22:40:36 itojun Exp $
- * $FreeBSD$
+ * $FreeBSD$ 
  */
 
 #include "opt_altq.h"
@@ -65,6 +65,7 @@
 #include "opt_inet6.h"
 #ifdef ALTQ_RED	/* red is enabled by ALTQ_RED option in opt_altq.h */
 
+#include <sys/param.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
@@ -79,7 +80,7 @@
 #ifdef ALTQ_FLOWVALVE
 #include <sys/queue.h>
 #include <sys/time.h>
-#endif /*ALTQ_FLOWVALVE */
+#endif
 #endif /* ALTQ3_COMPAT */
 
 #include <net/if.h>
@@ -90,7 +91,7 @@
 #include <netinet/ip.h>
 #ifdef INET6
 #include <netinet/ip6.h>
-#endif /* INET6 */
+#endif
 
 #include <netpfil/pf/pf.h>
 #include <netpfil/pf/pf_altq.h>
@@ -101,9 +102,8 @@
 #include <net/altq/altq_conf.h>
 #ifdef ALTQ_FLOWVALVE
 #include <net/altq/altq_flowvalve.h>
-#endif /* ALTQ_FLOWVALVE */
-#endif /* ALTQ_COMPAT */
-
+#endif
+#endif
 
 /*
  * ALTQ/RED (Random Early Detection) implementation using 32-bit
@@ -191,7 +191,7 @@
  */
 #ifdef RED_RANDOM_DROP
 #error "random-drop can't be used with flow-valve!"
-#endif /* RED_RANDOM_DROP */
+#endif
 #endif /* ALTQ_FLOWVALVE */
 
 /* red_list keeps all red_queue_t's allocated. */
@@ -220,13 +220,13 @@ static __inline void flowlist_move_to_head(struct flowvalve *, struct fve *);
 static __inline int fv_p2f(struct flowvalve *, int);
 #if 0 /* XXX: make the compiler happy (fv_alloc unused) */
 static struct flowvalve *fv_alloc(struct red *);
-#endif /* XXX */
+#endif
 static void fv_destroy(struct flowvalve *);
 static int fv_checkflow(struct flowvalve *, struct altq_pktattr *,
 			struct fve **);
 static void fv_dropbyred(struct flowvalve *fv, struct altq_pktattr *,
 			 struct fve *);
-#endif /*ALTQ_FLOWVALVE */
+#endif
 #endif /* ALTQ3_COMPAT */
 
 /*
@@ -340,7 +340,7 @@ red_destroy(red_t *rp)
 #ifdef ALTQ_FLOWVALVE
 	if (rp->red_flowvalve != NULL)
 		fv_destroy(rp->red_flowvalve);
-#endif /*ALTQ_FLOWVALVE */
+#endif
 #endif /* ALTQ3_COMPAT */
 	wtab_destroy(rp->red_wtab);
 	free(rp, M_DEVBUF);
@@ -372,7 +372,7 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 			m_freem(m);
 			return (-1);
 		}
-#endif /* ALTQ_FLOWVALVE */
+#endif
 #endif /* ALTQ3_COMPAT */
 
 	avg = rp->red_avg;
@@ -434,7 +434,7 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 				rp->red_count = 0;
 #ifdef RED_STATS
 				rp->red_stats.marked_packets++;
-#endif /* RED_STATS */
+#endif
 			} else {
 				/* unforced drop by red */
 				droptype = DTYPE_EARLY;
@@ -459,31 +459,31 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 	/* if successful, enqueue this packet. */
 	if (droptype == DTYPE_NODROP)
 		_addq(q, m);
-#endif /*RED_RANDOM_DROP */
+#endif
 	if (droptype != DTYPE_NODROP) {
 		if (droptype == DTYPE_EARLY) {
 			/* drop the incoming packet */
 #ifdef RED_STATS
 			rp->red_stats.drop_unforced++;
-#endif /* RED_STATS */
+#endif
 		} else {
 			/* forced drop, select a victim packet in the queue. */
 #ifdef RED_RANDOM_DROP
 			m = _getq_random(q);
-#endif /* RED_RANDOM_DROP */
+#endif
 #ifdef RED_STATS
 			rp->red_stats.drop_forced++;
-#endif /* RED_STATS */
+#endif
 		}
 #ifdef RED_STATS
 		PKTCNTR_ADD(&rp->red_stats.drop_cnt, m_pktlen(m));
-#endif /* RED_STATS */
+#endif
 		rp->red_count = 0;
 #ifdef ALTQ3_COMPAT
 #ifdef ALTQ_FLOWVALVE
 		if (rp->red_flowvalve != NULL)
 			fv_dropbyred(rp->red_flowvalve, pktattr, fve);
-#endif /* ALTQ_FLOWVALVE */
+#endif
 #endif /* ALTQ3_COMPAT */
 		m_freem(m);
 		return (-1);
@@ -491,7 +491,7 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 	/* successfully queued */
 #ifdef RED_STATS
 	PKTCNTR_ADD(&rp->red_stats.xmit_cnt, m_pktlen(m));
-#endif /* RED_STATS */
+#endif
 	return (0);
 }
 
@@ -796,7 +796,7 @@ redopen(dev, flag, fmt, p)
 	struct thread *p;
 #else
 	struct proc *p;
-#endif /* ALTQ3_COMPAT */
+#endif
 {
 	/* everything will be done when the queueing scheme is attached. */
 	return 0;
@@ -810,7 +810,7 @@ redclose(dev, flag, fmt, p)
 	struct thread *p;
 #else
 	struct proc *p;
-#endif /* FreeBSD Version */
+#endif
 {
 	red_queue_t *rqp;
 	int err, error = 0;
@@ -835,7 +835,7 @@ redioctl(dev, cmd, addr, flag, p)
 	struct thread *p;
 #else
 	struct proc *p;
-#endif /* FreeBSD Version */
+#endif
 {
 	red_queue_t *rqp;
 	struct red_interface *ifacep;
@@ -853,7 +853,7 @@ redioctl(dev, cmd, addr, flag, p)
 		if ((error = suser(p)) != 0)
 #else
 		if ((error = suser(p->p_ucred, &p->p_acflag)) != 0)
-#endif /* FreeBSD Version */
+#endif
 			return (error);
 		break;
 	}
@@ -1188,7 +1188,7 @@ red_purgeq(rqp)
 #define	FV_TIMESTAMP(tp)	getmicrotime(tp)
 #else
 #define	FV_TIMESTAMP(tp)	{ (*(tp)) = time; }
-#endif /* FreeBSD Version */
+#endif
 
 /*
  * Brtt table: 127 entry table to convert drop rate (p) to
@@ -1234,7 +1234,7 @@ flowlist_lookup(fv, pktattr, now)
 	struct ip *ip;
 #ifdef INET6
 	struct ip6_hdr *ip6;
-#endif /* INET6 */
+#endif
 	struct timeval tthresh;
 
 	if (pktattr == NULL)
@@ -1302,7 +1302,7 @@ flowlist_reclaim(fv, pktattr)
 	struct ip *ip;
 #ifdef INET6
 	struct ip6_hdr *ip6;
-#endif /* INET6 */
+#endif
 
 	/*
 	 * get an entry from the tail of the LRU list.
@@ -1323,7 +1323,7 @@ flowlist_reclaim(fv, pktattr)
 		fve->fve_flow.flow_ip6.ip6_src = ip6->ip6_src;
 		fve->fve_flow.flow_ip6.ip6_dst = ip6->ip6_dst;
 		break;
-#endif /* INET6 */
+#endif
 	}
 
 	fve->fve_state = Green;
@@ -1335,7 +1335,7 @@ flowlist_reclaim(fv, pktattr)
 	fv->fv_flows++;
 #ifdef FV_STATS
 	fv->fv_stats.alloc++;
-#endif /* FV_STATS */
+#endif
 	return (fve);
 }
 
@@ -1409,7 +1409,7 @@ fv_alloc(rp)
 
 	return (fv);
 }
-#endif /* XXX */
+#endif
 
 static void fv_destroy(fv)
 	struct flowvalve *fv;
@@ -1493,14 +1493,14 @@ fv_checkflow(fv, pktattr, fcache)
 			fve->fve_state = Green;
 #ifdef FV_STATS
 			fv->fv_stats.escape++;
-#endif /* FV_STATS */
+#endif
 		} else {
 			/* block this flow */
 			flowlist_move_to_head(fv, fve);
 			fve->fve_lastdrop = now;
 #ifdef FV_STATS
 			fv->fv_stats.predrop++;
-#endif /* FV_STATS */
+#endif
 			return (1);
 		}
 	}
@@ -1513,7 +1513,7 @@ fv_checkflow(fv, pktattr, fcache)
 		fve->fve_p = 0;
 #ifdef FV_STATS
 	fv->fv_stats.pass++;
-#endif /* FV_STATS */
+#endif
 	return (0);
 }
 
@@ -1521,7 +1521,6 @@ fv_checkflow(fv, pktattr, fcache)
  * called from red_addq when a packet is dropped by red.
  * should be called in splimp.
  */
-
 static void fv_dropbyred(fv, pktattr, fcache)
 	struct flowvalve *fv;
 	struct altq_pktattr *pktattr;
