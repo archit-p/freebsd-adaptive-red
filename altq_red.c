@@ -57,7 +57,7 @@
  * SUCH DAMAGE.
  *
  * $KAME: altq_red.c,v 1.18 2003/09/05 22:40:36 itojun Exp $
- * $FreeBSD$	
+ * $FreeBSD$
  */
 
 #include "opt_altq.h"
@@ -65,12 +65,13 @@
 #include "opt_inet6.h"
 #ifdef ALTQ_RED	/* red is enabled by ALTQ_RED option in opt_altq.h */
 
-#include <sys/param.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/systm.h>
 #include <sys/errno.h>
+#include <sys/types.h>
+
 #if 1 /* ALTQ3_COMPAT */
 #include <sys/sockio.h>
 #include <sys/proc.h>
@@ -78,7 +79,7 @@
 #ifdef ALTQ_FLOWVALVE
 #include <sys/queue.h>
 #include <sys/time.h>
-#endif
+#endif /*ALTQ_FLOWVALVE */
 #endif /* ALTQ3_COMPAT */
 
 #include <net/if.h>
@@ -89,7 +90,7 @@
 #include <netinet/ip.h>
 #ifdef INET6
 #include <netinet/ip6.h>
-#endif
+#endif /* INET6 */
 
 #include <netpfil/pf/pf.h>
 #include <netpfil/pf/pf_altq.h>
@@ -100,8 +101,9 @@
 #include <net/altq/altq_conf.h>
 #ifdef ALTQ_FLOWVALVE
 #include <net/altq/altq_flowvalve.h>
-#endif
-#endif
+#endif /* ALTQ_FLOWVALVE */
+#endif /* ALTQ_COMPAT */
+
 
 /*
  * ALTQ/RED (Random Early Detection) implementation using 32-bit
@@ -161,6 +163,14 @@
 #define	RED_LIMIT	60	/* default max queue length */
 #define	RED_STATS		/* collect statistics */
 
+/* 
+ * Parameters needed for adaptive-red 
+ */
+#define INV_MIN_P		100			/* Denominator of minimum drop probability */
+#define INV_MAX_P 		2			/* Denominator of maximum drop probability */
+#define RED_ALPHA_INV(val) 	max(100,val<<2)		/* Inverse of Additive adjustment factor for adaptive red */ 
+#define RED_BETA 		0.9			/* Multiplicative adjustment factor for adaptive red */ 
+
 /*
  * our default policy for forced-drop is drop-tail.
  * (in altq-1.1.2 or earlier, the default was random-drop.
@@ -181,7 +191,7 @@
  */
 #ifdef RED_RANDOM_DROP
 #error "random-drop can't be used with flow-valve!"
-#endif
+#endif /* RED_RANDOM_DROP */
 #endif /* ALTQ_FLOWVALVE */
 
 /* red_list keeps all red_queue_t's allocated. */
@@ -210,13 +220,13 @@ static __inline void flowlist_move_to_head(struct flowvalve *, struct fve *);
 static __inline int fv_p2f(struct flowvalve *, int);
 #if 0 /* XXX: make the compiler happy (fv_alloc unused) */
 static struct flowvalve *fv_alloc(struct red *);
-#endif
+#endif /* XXX */
 static void fv_destroy(struct flowvalve *);
 static int fv_checkflow(struct flowvalve *, struct altq_pktattr *,
 			struct fve **);
 static void fv_dropbyred(struct flowvalve *fv, struct altq_pktattr *,
 			 struct fve *);
-#endif
+#endif /*ALTQ_FLOWVALVE */
 #endif /* ALTQ3_COMPAT */
 
 /*
@@ -309,6 +319,17 @@ red_alloc(int weight, int inv_pmax, int th_min, int th_max, int flags,
 			 * rp->red_inv_pmax) << FP_SHIFT;
 
 	microtime(&rp->red_last);
+#ifdef ALTQ_ADAPTIVE_RED
+	int delta = (rp->red_thmax_s-rp->red_thmin_s)/5;
+	rp->target_min = rp->red_thmin_s + 2*delta;
+	rp->target_max = rp->red_thmin_s + 3*delta;
+	mtx_init(&rp->lock_mtx, "mtx_red", NULL, MTX_DEF);
+	callout_init_mtx(&rp->adaptive_callout, &rp->lock_mtx,
+			CALLOUT_RETURNUNLOCKED);
+	mtx_lock(&rp->lock_mtx);
+	callout_reset_sbt(&rp->adaptive_callout, 500*SBT_1MS,  0, red_adaptive_timer, (void *)rp, 0);
+	mtx_unlock(&rp->lock_mtx);
+#endif
 	return (rp);
 }
 
@@ -319,7 +340,7 @@ red_destroy(red_t *rp)
 #ifdef ALTQ_FLOWVALVE
 	if (rp->red_flowvalve != NULL)
 		fv_destroy(rp->red_flowvalve);
-#endif
+#endif /*ALTQ_FLOWVALVE */
 #endif /* ALTQ3_COMPAT */
 	wtab_destroy(rp->red_wtab);
 	free(rp, M_DEVBUF);
@@ -351,7 +372,7 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 			m_freem(m);
 			return (-1);
 		}
-#endif
+#endif /* ALTQ_FLOWVALVE */
 #endif /* ALTQ3_COMPAT */
 
 	avg = rp->red_avg;
@@ -413,7 +434,7 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 				rp->red_count = 0;
 #ifdef RED_STATS
 				rp->red_stats.marked_packets++;
-#endif
+#endif /* RED_STATS */
 			} else {
 				/* unforced drop by red */
 				droptype = DTYPE_EARLY;
@@ -438,31 +459,31 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 	/* if successful, enqueue this packet. */
 	if (droptype == DTYPE_NODROP)
 		_addq(q, m);
-#endif
+#endif /*RED_RANDOM_DROP */
 	if (droptype != DTYPE_NODROP) {
 		if (droptype == DTYPE_EARLY) {
 			/* drop the incoming packet */
 #ifdef RED_STATS
 			rp->red_stats.drop_unforced++;
-#endif
+#endif /* RED_STATS */
 		} else {
 			/* forced drop, select a victim packet in the queue. */
 #ifdef RED_RANDOM_DROP
 			m = _getq_random(q);
-#endif
+#endif /* RED_RANDOM_DROP */
 #ifdef RED_STATS
 			rp->red_stats.drop_forced++;
-#endif
+#endif /* RED_STATS */
 		}
 #ifdef RED_STATS
 		PKTCNTR_ADD(&rp->red_stats.drop_cnt, m_pktlen(m));
-#endif
+#endif /* RED_STATS */
 		rp->red_count = 0;
 #ifdef ALTQ3_COMPAT
 #ifdef ALTQ_FLOWVALVE
 		if (rp->red_flowvalve != NULL)
 			fv_dropbyred(rp->red_flowvalve, pktattr, fve);
-#endif
+#endif /* ALTQ_FLOWVALVE */
 #endif /* ALTQ3_COMPAT */
 		m_freem(m);
 		return (-1);
@@ -470,7 +491,7 @@ red_addq(red_t *rp, class_queue_t *q, struct mbuf *m,
 	/* successfully queued */
 #ifdef RED_STATS
 	PKTCNTR_ADD(&rp->red_stats.xmit_cnt, m_pktlen(m));
-#endif
+#endif /* RED_STATS */
 	return (0);
 }
 
@@ -707,6 +728,60 @@ pow_w(struct wtab *w, int n)
 	return (val);
 }
 
+#ifdef ALTQ_ADAPTIVE_RED
+/*
+ * Calling function for Adaptive-RED 
+ */
+void
+red_adaptive_timer(void *params)
+{
+	red_t *rp = (red_t *)params;
+    	red_adaptive_algo(rp);
+    	callout_reset_sbt(&rp->adaptive_callout, 500*SBT_1MS,  0, red_adaptive_timer, (void *)rp, 0);
+	mtx_unlock(&rp->lock_mtx);
+}
+
+/* 
+ * Adaptive-RED algorithm
+ */
+void
+red_adaptive_algo(red_t *rp)
+{
+        if(rp->red_inv_pmax >= INV_MAX_P && rp->red_avg >= rp->target_max) 
+        {
+        	/*
+		 * Additively increase RED drop
+		 * probability using RED_ALPHA_INV
+		 * red_inv_pmax = 1/((1/red_inv_pmax)+(1/RED_ALPHA_INV(red_inv_pmax)));
+		 */
+        	rp->red_inv_pmax = (rp->red_inv_pmax*RED_ALPHA_INV(rp->red_inv_pmax))/
+			(rp->red_inv_pmax + RED_ALPHA_INV(rp->red_inv_pmax));
+		/*
+		 * precompute probability denominator
+		 *  probd = (2 * (TH_MAX-TH_MIN) / pmax) in fixed-point
+		 */
+		rp->red_probd = (2 * (rp->red_thmax - rp->red_thmin)
+			 * rp->red_inv_pmax) << FP_SHIFT;
+    	}
+    	else if(rp->red_inv_pmax <= INV_MIN_P && rp->red_avg <= rp->target_min) 
+    	{
+    		/*
+		 * Multiplicately decrease RED drop
+		 * probability using RED_BETA
+		 * red_inv_pmax = red_inv_pmax/RED_BETA;
+		 */
+    		rp->red_inv_pmax = (rp->red_inv_pmax*10)/9;
+		/*
+		 * precompute probability denominator
+		 *  probd = (2 * (TH_MAX-TH_MIN) / pmax) in fixed-point
+		 */
+		rp->red_probd = (2 * (rp->red_thmax - rp->red_thmin)
+			 * rp->red_inv_pmax) << FP_SHIFT;
+    	}
+}
+
+#endif /* ALTQ_ADAPTIVE_RED */
+
 #ifdef ALTQ3_COMPAT
 /*
  * red device interface
@@ -721,7 +796,7 @@ redopen(dev, flag, fmt, p)
 	struct thread *p;
 #else
 	struct proc *p;
-#endif
+#endif /* ALTQ3_COMPAT */
 {
 	/* everything will be done when the queueing scheme is attached. */
 	return 0;
@@ -735,7 +810,7 @@ redclose(dev, flag, fmt, p)
 	struct thread *p;
 #else
 	struct proc *p;
-#endif
+#endif /* FreeBSD Version */
 {
 	red_queue_t *rqp;
 	int err, error = 0;
@@ -760,7 +835,7 @@ redioctl(dev, cmd, addr, flag, p)
 	struct thread *p;
 #else
 	struct proc *p;
-#endif
+#endif /* FreeBSD Version */
 {
 	red_queue_t *rqp;
 	struct red_interface *ifacep;
@@ -778,7 +853,7 @@ redioctl(dev, cmd, addr, flag, p)
 		if ((error = suser(p)) != 0)
 #else
 		if ((error = suser(p->p_ucred, &p->p_acflag)) != 0)
-#endif
+#endif /* FreeBSD Version */
 			return (error);
 		break;
 	}
@@ -1113,7 +1188,7 @@ red_purgeq(rqp)
 #define	FV_TIMESTAMP(tp)	getmicrotime(tp)
 #else
 #define	FV_TIMESTAMP(tp)	{ (*(tp)) = time; }
-#endif
+#endif /* FreeBSD Version */
 
 /*
  * Brtt table: 127 entry table to convert drop rate (p) to
@@ -1159,7 +1234,7 @@ flowlist_lookup(fv, pktattr, now)
 	struct ip *ip;
 #ifdef INET6
 	struct ip6_hdr *ip6;
-#endif
+#endif /* INET6 */
 	struct timeval tthresh;
 
 	if (pktattr == NULL)
@@ -1227,7 +1302,7 @@ flowlist_reclaim(fv, pktattr)
 	struct ip *ip;
 #ifdef INET6
 	struct ip6_hdr *ip6;
-#endif
+#endif /* INET6 */
 
 	/*
 	 * get an entry from the tail of the LRU list.
@@ -1248,7 +1323,7 @@ flowlist_reclaim(fv, pktattr)
 		fve->fve_flow.flow_ip6.ip6_src = ip6->ip6_src;
 		fve->fve_flow.flow_ip6.ip6_dst = ip6->ip6_dst;
 		break;
-#endif
+#endif /* INET6 */
 	}
 
 	fve->fve_state = Green;
@@ -1260,7 +1335,7 @@ flowlist_reclaim(fv, pktattr)
 	fv->fv_flows++;
 #ifdef FV_STATS
 	fv->fv_stats.alloc++;
-#endif
+#endif /* FV_STATS */
 	return (fve);
 }
 
@@ -1334,7 +1409,7 @@ fv_alloc(rp)
 
 	return (fv);
 }
-#endif
+#endif /* XXX */
 
 static void fv_destroy(fv)
 	struct flowvalve *fv;
@@ -1418,14 +1493,14 @@ fv_checkflow(fv, pktattr, fcache)
 			fve->fve_state = Green;
 #ifdef FV_STATS
 			fv->fv_stats.escape++;
-#endif
+#endif /* FV_STATS */
 		} else {
 			/* block this flow */
 			flowlist_move_to_head(fv, fve);
 			fve->fve_lastdrop = now;
 #ifdef FV_STATS
 			fv->fv_stats.predrop++;
-#endif
+#endif /* FV_STATS */
 			return (1);
 		}
 	}
@@ -1438,7 +1513,7 @@ fv_checkflow(fv, pktattr, fcache)
 		fve->fve_p = 0;
 #ifdef FV_STATS
 	fv->fv_stats.pass++;
-#endif
+#endif /* FV_STATS */
 	return (0);
 }
 
@@ -1446,6 +1521,7 @@ fv_checkflow(fv, pktattr, fcache)
  * called from red_addq when a packet is dropped by red.
  * should be called in splimp.
  */
+
 static void fv_dropbyred(fv, pktattr, fcache)
 	struct flowvalve *fv;
 	struct altq_pktattr *pktattr;

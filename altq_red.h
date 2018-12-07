@@ -31,6 +31,9 @@
 #define	_ALTQ_ALTQ_RED_H_
 
 #include <net/altq/altq_classq.h>
+#include <sys/types.h>
+#include <sys/mutex.h>
+#include <sys/lock.h>
 
 #ifdef ALTQ3_COMPAT
 struct red_interface {
@@ -153,6 +156,15 @@ typedef struct red {
 	struct wtab	*red_wtab;	/* weight table */
 	struct timeval	 red_last;	/* time when the queue becomes idle */
 
+#ifdef ALTQ_ADAPTIVE_RED
+	/* variables for Adaptive RED */
+	struct callout 	adaptive_callout;	/* callout structure for use with Adaptive-RED */
+	
+	int 		target_min;             /* target minimum for the queue */
+	int 		target_max;             /* target maximum for the queue */
+	struct mtx 	lock_mtx;
+#endif
+	
 #ifdef ALTQ3_COMPAT
 	struct flowvalve *red_flowvalve;	/* flowvalve state */
 #endif
@@ -193,6 +205,8 @@ extern int		 mark_ecn(struct mbuf *, struct altq_pktattr *, int);
 extern struct wtab	*wtab_alloc(int);
 extern int		 wtab_destroy(struct wtab *);
 extern int32_t		 pow_w(struct wtab *, int);
+extern void		 red_adaptive_timer(void *);
+extern void		 red_adaptive_algo(red_t *);
 
 #endif /* _KERNEL */
 
