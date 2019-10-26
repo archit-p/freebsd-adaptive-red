@@ -153,7 +153,7 @@
 #define	W_WEIGHT_2	64	/* inverse of weight of EWMA (63/64) */
 				/* q_weight = 0.015625 */
 
-/* fixed-point uses 12-bit decimal places */
+/* fixed-point uses 10-bit decimal places */
 #define	FP_SHIFT	12	/* fixed-point shift */
 
 /* red parameters for drop probability */
@@ -163,8 +163,6 @@
 
 #define	RED_LIMIT	60	/* default max queue length */
 #define	RED_STATS		/* collect statistics */
-
-#define PMAX_SHIFT	12	/* shift used for pmax */
 
 /* parameters needed for adaptive-red */
 #define INV_MIN_P		100					/* denominator of minimum drop probability */
